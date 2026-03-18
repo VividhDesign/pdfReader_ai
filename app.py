@@ -16,19 +16,17 @@ load_dotenv()
 # Page Configuration
 st.set_page_config(page_title="pdfReader_ai", page_icon="🤖", layout="wide")
 
-# --- UI CLEANUP (Professional Look) ---
+# --- UI CLEANUP ---
 hide_st_style = """
             <style>
             #MainMenu {visibility: hidden;}
             footer {visibility: hidden;}
             header {visibility: hidden;}
-            /* Mobile adjustment */
             .stChatInputContainer {padding-bottom: 20px;}
             </style>
             """
 st.markdown(hide_st_style, unsafe_allow_html=True)
 
-# Main Header
 st.title("🤖 pdfReader_ai")
 st.caption("Multi-PDF Contextual Chat | Llama 3.3 & Groq")
 
@@ -38,7 +36,6 @@ if "messages" not in st.session_state:
 if "vectorstore" not in st.session_state:
     st.session_state.vectorstore = None
 
-# Caching Models for Performance
 @st.cache_resource
 def get_tools():
     groq_api_key = os.getenv("GROQ_API_KEY")
@@ -50,7 +47,6 @@ def get_tools():
     )
     return embeddings, llm
 
-# Logic to Add PDF and Handle Empty/Image PDFs
 def add_pdf_to_knowledge(pdf_path):
     embeddings, llm = get_tools()
     
@@ -60,16 +56,15 @@ def add_pdf_to_knowledge(pdf_path):
         
         if not docs:
             st.error("❌ No text found in this PDF. It might be a scanned image.")
-            return
+            return False
 
         text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
         splits = text_splitter.split_documents(docs)
 
         if not splits:
-            st.warning("⚠️ Could not extract meaningful text chunks from this document.")
-            return
+            st.warning("⚠️ Could not extract meaningful text chunks.")
+            return False
 
-        # Vectorstore Persistence Logic
         if st.session_state.vectorstore is None:
             st.session_state.vectorstore = Chroma.from_documents(
                 documents=splits, 
@@ -81,7 +76,6 @@ def add_pdf_to_knowledge(pdf_path):
                 embedding=embeddings
             )
         
-        # Update the RAG Chain with new context
         retriever = st.session_state.vectorstore.as_retriever()
         prompt = ChatPromptTemplate.from_template(
             "Answer based on ALL provided documents. Context: {context}\nQuestion: {input}\nAnswer:"
@@ -94,25 +88,13 @@ def add_pdf_to_knowledge(pdf_path):
             {"context": retriever | format_docs, "input": RunnablePassthrough()}
             | prompt | llm | StrOutputParser()
         )
-        st.success("✅ Document processed and added to context!")
+        return True
 
     except Exception as e:
         st.error(f"❌ Critical Error: {str(e)}")
+        return False
 
-# --- MAIN PAGE UPLOAD (Best for Mobile) ---
-uploaded_file = st.file_uploader("Choose a PDF file", type="pdf", label_visibility="collapsed")
-process_button = st.button("🚀 Add to Chat Context", use_container_width=True)
-
-if uploaded_file and process_button:
-    with st.spinner(f"Reading {uploaded_file.name}..."):
-        temp_file = "temp_pdf_storage.pdf"
-        with open(temp_file, "wb") as f:
-            f.write(uploaded_file.getvalue())
-        add_pdf_to_knowledge(temp_file)
-
-st.divider()
-
-# --- SIDEBAR (Branding & Memory Control) ---
+# --- SIDEBAR (Memory Control Only) ---
 with st.sidebar:
     st.header("⚙️ Memory Control")
     if st.button("🗑️ Clear All Memory", use_container_width=True):
@@ -137,16 +119,42 @@ for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
 
-if prompt_input := st.chat_input("Ask a question about your documents..."):
-    if "rag_chain" not in st.session_state:
-        st.warning("Please upload a PDF first.")
-    else:
-        st.session_state.messages.append({"role": "user", "content": prompt_input})
-        with st.chat_message("user"):
-            st.markdown(prompt_input)
+# 🔥 NEW: Chat input with built-in attachment support (+)
+user_input = st.chat_input(
+    "Ask a question or attach a PDF...", 
+    accept_file="multiple", 
+    file_type=["pdf"]
+)
 
-        with st.chat_message("assistant"):
-            with st.spinner("Thinking..."):
-                response = st.session_state.rag_chain.invoke(prompt_input)
-                st.markdown(response)
-        st.session_state.messages.append({"role": "assistant", "content": response})
+if user_input:
+    # 1. Agar user ne file upload ki hai
+    if user_input.files:
+        with st.chat_message("user"):
+            file_msg = f"📎 *Uploaded {len(user_input.files)} document(s)*"
+            st.markdown(file_msg)
+            st.session_state.messages.append({"role": "user", "content": file_msg})
+            
+        with st.spinner("Processing documents..."):
+            for file in user_input.files:
+                temp_file = "temp_pdf_storage.pdf"
+                with open(temp_file, "wb") as f:
+                    f.write(file.getvalue())
+                
+                success = add_pdf_to_knowledge(temp_file)
+                if success:
+                    st.toast(f"✅ Processed {file.name}")
+                    
+    # 2. Agar user ne koi text bheja hai
+    if user_input.text:
+        if "rag_chain" not in st.session_state:
+            st.warning("Please attach a PDF using the '+' icon first! 👈")
+        else:
+            st.session_state.messages.append({"role": "user", "content": user_input.text})
+            with st.chat_message("user"):
+                st.markdown(user_input.text)
+
+            with st.chat_message("assistant"):
+                with st.spinner("Thinking..."):
+                    response = st.session_state.rag_chain.invoke(user_input.text)
+                    st.markdown(response)
+            st.session_state.messages.append({"role": "assistant", "content": response})

@@ -10,52 +10,33 @@ from langchain_core.output_parsers import StrOutputParser
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_groq import ChatGroq
 
-# API Keys load karna
+# API Keys loading
 load_dotenv()
 
-# Page Configuration (Mobile-friendly layout)
-st.set_page_config(page_title="pdfReader_ai", page_icon="🤖", layout="centered")
+# Page Configuration
+st.set_page_config(page_title="pdfReader_ai", page_icon="🤖", layout="wide")
 
-# --- UI CLEANUP ---
+# --- UI CLEANUP (Professional Look) ---
 hide_st_style = """
             <style>
             #MainMenu {visibility: hidden;}
             footer {visibility: hidden;}
             header {visibility: hidden;}
-            /* Mobile adjustment for chat input */
-            .stChatInputContainer {padding-bottom: 20px;}
             </style>
             """
 st.markdown(hide_st_style, unsafe_allow_html=True)
 
-# Main Title
+# Main Header
 st.title("🤖 pdfReader_ai")
-st.caption("Chat with your documents in seconds using Llama 3.3 & Groq")
-st.markdown("---")
+st.caption("Multi-PDF Contextual Chat | Llama 3.3 & Groq")
 
-# --- MAIN PAGE UPLOAD (Better for Mobile) ---
-uploaded_file = st.file_uploader("Choose a PDF file", type="pdf", label_visibility="collapsed")
-process_button = st.button("🚀 Process & Analyze", use_container_width=True)
-
-st.markdown("---")
-
-# Sidebar for Branding only
-with st.sidebar:
-    st.markdown("### 👨‍💻 Developed by")
-    st.markdown("**Vividh Yadav**")
-    st.caption("B.Tech AI & ML | BIT Mesra")
-    
-    st.divider()
-    with st.expander("📫 Contact & Links", expanded=True):
-        st.write("📧 [vividh50@gmail.com](mailto:vividh50@gmail.com)")
-        st.markdown("[🔗 LinkedIn Profile](https://www.linkedin.com/in/vividh-yadav-866a44380/)")
-        st.markdown("[💻 GitHub Portfolio](https://github.com/VividhDesign)")
-
-# Initialize Chat History
+# --- INITIALIZE SESSION STATES ---
 if "messages" not in st.session_state:
     st.session_state.messages = []
+if "vectorstore" not in st.session_state:
+    st.session_state.vectorstore = None
 
-# Caching Models
+# Caching Models for Performance
 @st.cache_resource
 def get_tools():
     groq_api_key = os.getenv("GROQ_API_KEY")
@@ -67,53 +48,105 @@ def get_tools():
     )
     return embeddings, llm
 
-# RAG Logic
-def get_rag_chain(pdf_path):
+# Logic to Add PDF and Handle Empty/Image PDFs
+def add_pdf_to_knowledge(pdf_path):
     embeddings, llm = get_tools()
-    loader = PyPDFLoader(pdf_path)
-    docs = loader.load()
-    text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
-    splits = text_splitter.split_documents(docs)
     
-    vectorstore = Chroma.from_documents(documents=splits, embedding=embeddings)
-    retriever = vectorstore.as_retriever()
+    try:
+        loader = PyPDFLoader(pdf_path)
+        docs = loader.load()
+        
+        # Check if PDF has any readable text
+        if not docs:
+            st.error("❌ No text found in this PDF. It might be a scanned image.")
+            return
+
+        text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
+        splits = text_splitter.split_documents(docs)
+
+        # Safety check for empty splits (prevents ChromaDB ValueError)
+        if not splits:
+            st.warning("⚠️ Could not extract meaningful text chunks from this document.")
+            return
+
+        # Vectorstore Persistence Logic
+        if st.session_state.vectorstore is None:
+            st.session_state.vectorstore = Chroma.from_documents(
+                documents=splits, 
+                embedding=embeddings
+            )
+        else:
+            st.session_state.vectorstore.add_documents(
+                documents=splits,
+                embedding=embeddings # Critical fix for the ValueError
+            )
+        
+        # Update the RAG Chain with new context
+        retriever = st.session_state.vectorstore.as_retriever()
+        prompt = ChatPromptTemplate.from_template(
+            "Answer based on ALL provided documents. Context: {context}\nQuestion: {input}\nAnswer:"
+        )
+        
+        def format_docs(docs):
+            return "\n\n".join(doc.page_content for doc in docs)
+
+        st.session_state.rag_chain = (
+            {"context": retriever | format_docs, "input": RunnablePassthrough()}
+            | prompt | llm | StrOutputParser()
+        )
+        st.success("✅ Document processed and added to context!")
+
+    except Exception as e:
+        st.error(f"❌ Critical Error: {str(e)}")
+
+# --- SIDEBAR (Upload & Branding) ---
+with st.sidebar:
+    st.header("📄 Knowledge Base")
+    uploaded_file = st.file_uploader("Upload PDF", type="pdf")
+    process_button = st.button("📥 Add to Chat Context", use_container_width=True)
     
-    prompt = ChatPromptTemplate.from_template(
-        "Answer the question based ONLY on the context.\n\nContext: {context}\n\nQuestion: {input}\n\nAnswer:"
-    )
+    if uploaded_file and process_button:
+        with st.spinner(f"Reading {uploaded_file.name}..."):
+            temp_file = "temp_pdf_storage.pdf"
+            with open(temp_file, "wb") as f:
+                f.write(uploaded_file.getvalue())
+            add_pdf_to_knowledge(temp_file)
 
-    def format_docs(docs):
-        return "\n\n".join(doc.page_content for doc in docs)
+    st.divider()
+    if st.button("🗑️ Clear All Memory"):
+        st.session_state.messages = []
+        st.session_state.vectorstore = None
+        if "rag_chain" in st.session_state:
+            del st.session_state.rag_chain
+        st.rerun()
 
-    chain = (
-        {"context": retriever | format_docs, "input": RunnablePassthrough()}
-        | prompt | llm | StrOutputParser()
-    )
-    return chain
+    # --- BRANDING SECTION ---
+    st.markdown("### 👨‍💻 Developed by")
+    st.markdown("**Vividh Yadav**")
+    st.caption("B.Tech AI & ML | BIT Mesra")
+    
+    with st.expander("📬 Contact Me"):
+        st.write("📧 [vividh50@gmail.com](mailto:vividh50@gmail.com)")
+        st.markdown("[🔗 LinkedIn Profile](https://www.linkedin.com/in/vividh-yadav-866a44380/)")
+        st.markdown("[💻 GitHub Portfolio](https://github.com/VividhDesign)")
 
-# Processing
-if uploaded_file and process_button:
-    with st.spinner("Analyzing PDF..."):
-        temp_file = "temp_pdf_storage.pdf"
-        with open(temp_file, "wb") as f:
-            f.write(uploaded_file.getvalue())
-        st.session_state.rag_chain = get_rag_chain(temp_file)
-        st.success("Ready! Ask your questions below.")
-
-# Chat Interface
+# --- CHAT INTERFACE ---
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
 
-if prompt_input := st.chat_input("Ask something about the PDF..."):
+if prompt_input := st.chat_input("Ask a question about your documents..."):
     if "rag_chain" not in st.session_state:
-        st.warning("Please upload a PDF first.")
+        st.warning("Please upload a PDF from the sidebar first.")
     else:
+        # User message
         st.session_state.messages.append({"role": "user", "content": prompt_input})
         with st.chat_message("user"):
             st.markdown(prompt_input)
 
+        # Assistant response
         with st.chat_message("assistant"):
-            response = st.session_state.rag_chain.invoke(prompt_input)
-            st.markdown(response)
+            with st.spinner("Thinking..."):
+                response = st.session_state.rag_chain.invoke(prompt_input)
+                st.markdown(response)
         st.session_state.messages.append({"role": "assistant", "content": response})

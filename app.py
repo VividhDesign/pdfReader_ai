@@ -100,7 +100,6 @@ def add_pdf_to_knowledge(pdf_path):
         st.error(f"❌ Critical Error: {str(e)}")
 
 # --- MAIN PAGE UPLOAD (Best for Mobile) ---
-st.markdown("### 📄 Step 1: Upload & Process")
 uploaded_file = st.file_uploader("Choose a PDF file", type="pdf", label_visibility="collapsed")
 process_button = st.button("🚀 Add to Chat Context", use_container_width=True)
 
@@ -134,7 +133,6 @@ with st.sidebar:
         st.markdown("[💻 GitHub](https://github.com/VividhDesign)")
 
 # --- CHAT INTERFACE ---
-st.markdown("### 💬 Step 2: Chat")
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])

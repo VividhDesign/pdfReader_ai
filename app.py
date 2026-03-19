@@ -72,17 +72,27 @@ def add_pdf_to_knowledge(pdf_path):
             )
         else:
             st.session_state.vectorstore.add_documents(
-                documents=splits,
-                embedding=embeddings
+                documents=splits
             )
         
-        retriever = st.session_state.vectorstore.as_retriever()
+        # 🔥 FIX 2: Added MMR search for diverse retrieval across multiple PDFs & increased top K
+        retriever = st.session_state.vectorstore.as_retriever(
+            search_type="mmr",
+            search_kwargs={"k": 6, "fetch_k": 20}
+        )
+        
+        # 🔥 FIX 3: Prompt updated to properly differentiate between documents
         prompt = ChatPromptTemplate.from_template(
-            "Answer based on ALL provided documents. Context: {context}\nQuestion: {input}\nAnswer:"
+            "You are an intelligent assistant. Use the following document extracts to answer the user's question.\n"
+            "The context includes the source PDF filename for reference. Pay attention to all provided sources.\n\n"
+            "CONTEXT:\n{context}\n\n"
+            "Question: {input}\n"
+            "Answer:"
         )
         
         def format_docs(docs):
-            return "\n\n".join(doc.page_content for doc in docs)
+            # Formats chunks with their actual source filename so the LLM doesn't get confused
+            return "\n\n".join(f"[Source: {os.path.basename(doc.metadata.get('source', 'Unknown'))}]\n{doc.page_content}" for doc in docs)
 
         st.session_state.rag_chain = (
             {"context": retriever | format_docs, "input": RunnablePassthrough()}
@@ -119,7 +129,6 @@ for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
 
-# 🔥 NEW: Chat input with built-in attachment support (+)
 user_input = st.chat_input(
     "Ask a question or attach a PDF...", 
     accept_file="multiple", 
@@ -136,13 +145,18 @@ if user_input:
             
         with st.spinner("Processing documents..."):
             for file in user_input.files:
-                temp_file = "temp_pdf_storage.pdf"
+                # 🔥 FIX 1: Unique temp file name so metadata doesn't clash
+                temp_file = f"temp_{file.name}"
                 with open(temp_file, "wb") as f:
                     f.write(file.getvalue())
                 
                 success = add_pdf_to_knowledge(temp_file)
                 if success:
                     st.toast(f"✅ Processed {file.name}")
+                
+                # Cleanup temporary file after processing to save space
+                if os.path.exists(temp_file):
+                    os.remove(temp_file)
                     
     # 2. Agar user ne koi text bheja hai
     if user_input.text:

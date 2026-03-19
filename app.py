@@ -30,16 +30,7 @@ st.markdown(hide_st_style, unsafe_allow_html=True)
 st.title("🤖 pdfReader_ai")
 st.caption("Multi-PDF Contextual Chat | Llama 3.3 & Groq")
 
-# --- INITIALIZE SESSION STATES ---
-if "messages" not in st.session_state:
-    st.session_state.messages = []
-if "vectorstore" not in st.session_state:
-    st.session_state.vectorstore = None
-if "file_list" not in st.session_state:
-    st.session_state.file_list = []
-if "selected_doc" not in st.session_state:
-    st.session_state.selected_doc = "All Documents"
-
+# --- CACHED RESOURCES ---
 @st.cache_resource
 def get_tools():
     groq_api_key = os.getenv("GROQ_API_KEY")
@@ -50,6 +41,21 @@ def get_tools():
         groq_api_key=groq_api_key
     )
     return embeddings, llm
+
+# --- INITIALIZE SESSION STATES & PERSISTENT MEMORY ---
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+
+# Initialize Vector Database and File List (In-Memory Only)
+if "vectorstore" not in st.session_state:
+    st.session_state.vectorstore = None
+
+if "file_list" not in st.session_state:
+    st.session_state.file_list = []
+
+if "selected_doc" not in st.session_state:
+    st.session_state.selected_doc = "All Documents"
+
 
 def add_pdf_to_knowledge(pdf_path):
     embeddings, _ = get_tools()
@@ -69,7 +75,7 @@ def add_pdf_to_knowledge(pdf_path):
             st.warning("⚠️ Could not extract meaningful text chunks.")
             return False
 
-        # Add to vector database
+        # Add to vector database (In-memory, clears on page refresh)
         if st.session_state.vectorstore is None:
             st.session_state.vectorstore = Chroma.from_documents(
                 documents=splits, 
@@ -89,7 +95,6 @@ with st.sidebar:
     if st.session_state.file_list:
         st.header("⚙️ Chat Settings")
         
-        # 🔥 FIX: Use index to control the selectbox instead of the widget key binding
         doc_options = ["All Documents"] + st.session_state.file_list
         
         try:
@@ -97,7 +102,6 @@ with st.sidebar:
         except ValueError:
             current_index = 0
             
-        # Update selected_doc based on the return value of the widget
         st.session_state.selected_doc = st.selectbox(
             "📚 Active Document Context",
             options=doc_options,
@@ -136,7 +140,9 @@ user_input = st.chat_input(
 )
 
 if user_input:
-    # 1. Agar user ne file upload ki hai
+    has_new_file = False
+    
+    # 1. Agar user ne file upload ki hai (Process this first)
     if user_input.files:
         with st.chat_message("user"):
             file_msg = f"📎 *Uploaded {len(user_input.files)} document(s)*"
@@ -145,27 +151,23 @@ if user_input:
             
         with st.spinner("Processing documents..."):
             for file in user_input.files:
-                # Use exact file name so metadata source matches perfectly
                 file_path = file.name
                 with open(file_path, "wb") as f:
                     f.write(file.getvalue())
                 
                 success = add_pdf_to_knowledge(file_path)
                 if success:
-                    # Update file list and automatically switch context to the newly uploaded file!
                     if file.name not in st.session_state.file_list:
                         st.session_state.file_list.append(file.name)
-                    st.session_state.selected_doc = file.name # This works perfectly now
+                    st.session_state.selected_doc = file.name
+                    has_new_file = True
                     st.toast(f"✅ Processed {file.name}")
                 
                 # Cleanup temporary file
                 if os.path.exists(file_path):
                     os.remove(file_path)
-            
-            # Rerun to update the sidebar dropdown with the new file
-            st.rerun()
                     
-    # 2. Agar user ne koi text bheja hai
+    # 2. Agar user ne koi text bheja hai (Process this second)
     if user_input.text:
         if st.session_state.vectorstore is None:
             st.warning("Please attach a PDF using the '+' icon first! 👈")
@@ -178,10 +180,8 @@ if user_input:
                 with st.spinner("Thinking..."):
                     _, llm = get_tools()
                     
-                    # 🔥 FIX: Dynamically filter vectorstore based on user's selection
                     search_kwargs = {"k": 6, "fetch_k": 20}
                     if st.session_state.selected_doc != "All Documents":
-                        # Chroma filter syntax: forces AI to only look at the selected file
                         search_kwargs["filter"] = {"source": st.session_state.selected_doc}
                         
                     retriever = st.session_state.vectorstore.as_retriever(
@@ -189,7 +189,6 @@ if user_input:
                         search_kwargs=search_kwargs
                     )
                     
-                    # Get recent chat history for context (last 4 messages)
                     recent_messages = st.session_state.messages[-5:-1]
                     history_text = "\n".join([f"{m['role'].capitalize()}: {m['content']}" for m in recent_messages if '📎' not in m['content']])
                     if not history_text:
@@ -207,7 +206,6 @@ if user_input:
                     def format_docs(docs):
                         return "\n\n".join(f"[Source: {os.path.basename(doc.metadata.get('source', 'Unknown'))}]\n{doc.page_content}" for doc in docs)
 
-                    # Build chain dynamically at query time
                     rag_chain = (
                         {
                             "context": retriever | format_docs, 
@@ -220,3 +218,8 @@ if user_input:
                     response = rag_chain.invoke(user_input.text)
                     st.markdown(response)
             st.session_state.messages.append({"role": "assistant", "content": response})
+
+    # 3. Handle UI update: Only rerun if a file was uploaded WITHOUT text 
+    # (If there was text, Streamlit updates the UI naturally after the assistant replies)
+    if has_new_file and not user_input.text:
+        st.rerun()

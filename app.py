@@ -590,7 +590,7 @@ def process_question(question_text):
     )
 
     # Get retrieved docs for citations
-    retrieved_docs = retriever.get_relevant_documents(question_text)
+    retrieved_docs = retriever.invoke(question_text)
     citations = get_citations_text(retrieved_docs)
 
     def format_docs(docs):

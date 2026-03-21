@@ -216,14 +216,38 @@ def _fmt_docs(docs):
 # ─── RAG Chain (Streaming) ────────────────────────────────────────────────────
 def stream_answer(question, doc_filter=None):
     llm = get_llm(st.session_state.temperature)
-    # Step 1: MMR retrieval — fetch wide pool
-    sk = {"k": 12, "fetch_k": 25}
+
+    # Cap k/fetch_k to actual chunk count — prevents MMR hanging on small docs
+    try:
+        total_chunks = st.session_state.vectorstore._collection.count()
+    except Exception:
+        total_chunks = 10
+    total_chunks = max(total_chunks, 1)  # never 0
+    safe_k = min(8, total_chunks)
+    safe_fetch_k = min(25, total_chunks)
+
+    # Step 1: MMR retrieval with safe bounds
+    sk = {"k": safe_k, "fetch_k": safe_fetch_k}
     if doc_filter:
         sk["filter"] = {"filename": doc_filter}
     retriever = st.session_state.vectorstore.as_retriever(search_type="mmr", search_kwargs=sk)
-    candidate_docs = retriever.invoke(question)
+    try:
+        candidate_docs = retriever.invoke(question)
+    except Exception:
+        # Fallback to plain similarity search
+        candidate_docs = st.session_state.vectorstore.similarity_search(
+            question, k=min(4, total_chunks)
+        )
+
+    # Handle empty results gracefully
+    if not candidate_docs:
+        def _empty():
+            yield "⚠️ No relevant content found in the indexed documents for this question."
+        return _empty(), []
+
     # Step 2: Cross-encoder re-ranking — keep best 4
-    reranked_docs = _rerank(question, candidate_docs, top_n=4)
+    top_n = min(4, len(candidate_docs))
+    reranked_docs = _rerank(question, candidate_docs, top_n=top_n)
     citations = _citations(reranked_docs)
     for d in reranked_docs:
         fn = d.metadata.get("filename", "Unknown")
@@ -233,7 +257,6 @@ def stream_answer(question, doc_filter=None):
         for m in st.session_state.messages[-6:-1]
         if "📎" not in m.get("content", "")
     ]) or "No prior conversation."
-    # Format reranked docs as context string
     context_str = _fmt_docs(reranked_docs)
     prompt = ChatPromptTemplate.from_template(
         "You are an expert document analyst.\n"
@@ -316,8 +339,13 @@ def run_question(question, doc_filter=None):
     with st.chat_message("user"):
         st.markdown(question)
     with st.chat_message("assistant"):
-        gen, citations = stream_answer(question, doc_filter)
-        response = st.write_stream(gen)
+        try:
+            gen, citations = stream_answer(question, doc_filter)
+            response = st.write_stream(gen)
+        except Exception as e:
+            response = f"❌ Something went wrong: {e}\n\nPlease try again or rephrase your question."
+            st.error(response)
+            citations = []
         if citations:
             with st.expander("📍 Sources", expanded=True):
                 for c in citations:

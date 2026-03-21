@@ -559,12 +559,18 @@ if st.session_state.vectorstore is not None:
     try:
         audio = st.audio_input("Record question", label_visibility="collapsed", key="voice_in")
         if audio:
-            with st.spinner("🎙️ Transcribing via Groq Whisper..."):
-                text = transcribe_audio(audio.read())
-            if text:
-                st.info(f"🎙️ Heard: *{text}*")
-                st.session_state["_pending_q"] = text
-                st.rerun()
+            import hashlib
+            audio_bytes = audio.read()
+            audio_hash = hashlib.md5(audio_bytes).hexdigest()
+            # Only transcribe if this is a NEW recording (not the same one from a previous rerun)
+            if st.session_state.get("_last_audio_hash") != audio_hash:
+                st.session_state["_last_audio_hash"] = audio_hash
+                with st.spinner("🎙️ Transcribing via Groq Whisper..."):
+                    text = transcribe_audio(audio_bytes)
+                if text:
+                    st.info(f"🎙️ Heard: *{text}*")
+                    st.session_state["_pending_q"] = text
+                    st.rerun()
     except AttributeError:
         st.caption("🎙️ Voice input requires Streamlit ≥ 1.40. Run: `pip install --upgrade streamlit`")
 

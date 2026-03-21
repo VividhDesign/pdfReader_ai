@@ -26,7 +26,11 @@ except Exception:
     TXT_OK = False
 
 load_dotenv()
-PERSIST_DIR = "./chroma_store"
+
+# Use in-memory ChromaDB on Streamlit Cloud (ephemeral + Rust backend issues)
+# Use persisted ChromaDB locally for convenience
+IS_CLOUD = os.path.exists("/mount/src")
+PERSIST_DIR = None if IS_CLOUD else "./chroma_store"
 
 # ─── Page Config ─────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -96,7 +100,7 @@ def init_session():
         if k not in st.session_state:
             st.session_state[k] = v
     # Load persisted vectorstore
-    if st.session_state.vectorstore is None and os.path.exists(PERSIST_DIR):
+    if st.session_state.vectorstore is None and PERSIST_DIR and os.path.exists(PERSIST_DIR):
         try:
             vs = Chroma(persist_directory=PERSIST_DIR, embedding_function=get_embeddings())
             st.session_state.vectorstore = vs
@@ -158,9 +162,10 @@ def ingest_documents(docs, filename):
         st.warning("⚠️ Could not extract text.")
         return False
     if st.session_state.vectorstore is None:
-        st.session_state.vectorstore = Chroma.from_documents(
-            documents=splits, embedding=embeddings, persist_directory=PERSIST_DIR,
-        )
+        chroma_kwargs = {"documents": splits, "embedding": embeddings}
+        if PERSIST_DIR:
+            chroma_kwargs["persist_directory"] = PERSIST_DIR
+        st.session_state.vectorstore = Chroma.from_documents(**chroma_kwargs)
     else:
         st.session_state.vectorstore.add_documents(splits)
     with st.spinner(f"📋 Summarizing **{filename}**..."):
@@ -430,7 +435,7 @@ with st.sidebar:
             )
     if st.button("🗑️ Clear Session", use_container_width=True):
         import shutil
-        if os.path.exists(PERSIST_DIR):
+        if PERSIST_DIR and os.path.exists(PERSIST_DIR):
             shutil.rmtree(PERSIST_DIR)
         for k in list(st.session_state.keys()):
             del st.session_state[k]

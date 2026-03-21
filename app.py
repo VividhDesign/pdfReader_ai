@@ -6,9 +6,7 @@ from langchain_community.document_loaders import PyPDFLoader, WebBaseLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import Chroma
 from langchain_huggingface import HuggingFaceEmbeddings
-from langchain_community.cross_encoders import HuggingFaceCrossEncoder
-from langchain.retrievers.document_compressors import CrossEncoderReranker
-from langchain.retrievers import ContextualCompressionRetriever
+from sentence_transformers import CrossEncoder as SentenceCrossEncoder
 from langchain_groq import ChatGroq
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnablePassthrough
@@ -61,8 +59,15 @@ def get_embeddings():
 
 @st.cache_resource
 def get_reranker():
-    m = HuggingFaceCrossEncoder(model_name="cross-encoder/ms-marco-MiniLM-L-6-v2")
-    return CrossEncoderReranker(model=m, top_n=4)
+    return SentenceCrossEncoder("cross-encoder/ms-marco-MiniLM-L-6-v2")
+
+def _rerank(query, docs, top_n=4):
+    """Score docs with cross-encoder and return top_n by relevance."""
+    model = get_reranker()
+    pairs = [(query, d.page_content) for d in docs]
+    scores = model.predict(pairs)
+    ranked = sorted(zip(scores, docs), key=lambda x: x[0], reverse=True)
+    return [d for _, d in ranked[:top_n]]
 
 def get_llm(temp=0.1):
     return ChatGroq(
@@ -204,23 +209,18 @@ def _fmt_docs(docs):
     return "\n\n".join(parts)
 
 # ─── RAG Chain (Streaming) ────────────────────────────────────────────────────
-def _make_retriever(doc_filter=None):
-    sk = {"k": 10, "fetch_k": 25}
-    if doc_filter:
-        sk["filter"] = {"filename": doc_filter}
-    base = st.session_state.vectorstore.as_retriever(search_type="mmr", search_kwargs=sk)
-    return ContextualCompressionRetriever(base_compressor=get_reranker(), base_retriever=base)
-
 def stream_answer(question, doc_filter=None):
     llm = get_llm(st.session_state.temperature)
-    retriever = _make_retriever(doc_filter)
-    # Get raw docs for citations (fast path, no reranker overhead)
-    sk2 = {"k": 6}
+    # Step 1: MMR retrieval — fetch wide pool
+    sk = {"k": 12, "fetch_k": 25}
     if doc_filter:
-        sk2["filter"] = {"filename": doc_filter}
-    raw_docs = st.session_state.vectorstore.similarity_search(question, **sk2)
-    citations = _citations(raw_docs)
-    for d in raw_docs:
+        sk["filter"] = {"filename": doc_filter}
+    retriever = st.session_state.vectorstore.as_retriever(search_type="mmr", search_kwargs=sk)
+    candidate_docs = retriever.invoke(question)
+    # Step 2: Cross-encoder re-ranking — keep best 4
+    reranked_docs = _rerank(question, candidate_docs, top_n=4)
+    citations = _citations(reranked_docs)
+    for d in reranked_docs:
         fn = d.metadata.get("filename", "Unknown")
         st.session_state.citation_counts[fn] = st.session_state.citation_counts.get(fn, 0) + 1
     history = "\n".join([
@@ -228,6 +228,8 @@ def stream_answer(question, doc_filter=None):
         for m in st.session_state.messages[-6:-1]
         if "📎" not in m.get("content", "")
     ]) or "No prior conversation."
+    # Format reranked docs as context string
+    context_str = _fmt_docs(reranked_docs)
     prompt = ChatPromptTemplate.from_template(
         "You are an expert document analyst.\n"
         "Rules:\n"
@@ -241,7 +243,7 @@ def stream_answer(question, doc_filter=None):
     )
     chain = (
         {
-            "context": retriever | _fmt_docs,
+            "context": lambda x: context_str,
             "input": RunnablePassthrough(),
             "history": lambda x: history,
         }

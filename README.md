@@ -1,6 +1,6 @@
-# 🤖 pdfReader_ai — Professional RAG Chatbot
+# 🤖 pdfReader_ai — Advanced RAG Document Chatbot
 
-> **Chat with any PDF** using RAG-powered AI. Faster than ChatGPT. Free. Privacy-first.
+> **Chat with any document** using production-grade RAG. Streaming · Re-ranking · Voice · Multi-format · Persistent.
 
 [![Live Demo](https://img.shields.io/badge/Live%20Demo-Streamlit-7C3AED?style=for-the-badge&logo=streamlit)](https://pdfreaderai-hgyqrns8rbcwcpfi7wts4i.streamlit.app/)
 [![Python](https://img.shields.io/badge/Python-3.10+-3776AB?style=for-the-badge&logo=python)](https://python.org)
@@ -12,77 +12,92 @@
 
 | Feature | Description |
 |---|---|
-| 📋 **Auto Document Summary** | Instantly get a 4-5 bullet summary when any PDF is uploaded |
-| 📍 **Page-Level Citations** | Every answer cites the exact PDF page it came from |
-| 💡 **Suggested Questions** | AI auto-generates 3 smart questions from your document |
-| 💾 **Export Chat** | Download entire Q&A session as a Markdown file |
-| 🗂️ **Multi-PDF Support** | Upload unlimited PDFs and chat across all of them |
-| 🎚️ **Temperature Control** | Adjust AI creativity from precise (0) to creative (1) |
-| 📊 **Document Metadata** | See pages, word count for each uploaded PDF |
-| ⚡ **Groq LPU Speed** | Near-instant responses via Groq's hardware accelerator |
-| 🔒 **Local Embeddings** | Embeddings run on-device — your documents never leave your machine |
-| 🎨 **Premium Dark UI** | Polished purple-gradient interface with smooth interactions |
+| ⚡ **Streaming Responses** | Tokens appear in real-time like ChatGPT typewriter effect |
+| 🎯 **Cross-Encoder Re-ranking** | MMR fetches 10 candidates → re-ranker keeps best 4 |
+| 🎙️ **Voice Input** | Groq Whisper voice-to-text transcription |
+| 🌐 **Web URL Ingestion** | Add any webpage to your knowledge base |
+| 📄 **Multi-Format** | PDF · DOCX · TXT · Web URLs |
+| 📋 **Auto Document Summary** | 4-5 bullet summary on every upload |
+| 📍 **Page-Level Citations** | Every answer cites exact source pages |
+| 💡 **Suggested Questions** | AI auto-generates 3 smart questions |
+| 🔀 **Document Compare Mode** | Ask a question, get side-by-side answers from 2 documents |
+| 💾 **Export Chat** | Download as `.md` OR styled `.html` report |
+| 🗂️ **Multi-Document Support** | Unlimited uploads, cross-document search |
+| 💿 **Persistent ChromaDB** | Vector store survives page refresh |
+| 📊 **Analytics Panel** | Query count, most cited docs bar chart |
+| 🎚️ **Temperature Control** | Adjust AI creativity from precise to creative |
+| 🔒 **Local Embeddings** | all-MiniLM-L6-v2 runs on-device — zero data leakage |
+| 🎨 **Premium Dark UI** | Purple glassmorphism with CSS animations |
 
 ---
 
-## 🆚 Why pdfReader_ai vs ChatGPT / Gemini?
+## 🏗️ Architecture
 
-| | pdfReader_ai | ChatGPT Plus | Gemini |
-|---|---|---|---|
-| **Speed** | ⚡ Groq LPU (fastest) | Medium | Medium |
-| **Page Citations** | ✅ Yes | ❌ No | ❌ No |
-| **Auto Summary** | ✅ Yes | ❌ No | ❌ No |
-| **Privacy** | ✅ Local embeddings | ❌ Cloud | ❌ Cloud |
-| **Multi-PDF** | ✅ Unlimited | ⚠️ Limited | ⚠️ Limited |
-| **Export Chat** | ✅ Yes | ❌ No | ❌ No |
-| **Cost** | 🆓 Free | 💰 $20/mo | Freemium |
+```
+PDF / DOCX / TXT / URL
+  └→ Document Loader (format-aware)
+  └→ RecursiveCharacterTextSplitter (chunk_size=1000, overlap=200)
+  └→ HuggingFaceEmbeddings (all-MiniLM-L6-v2) → 384-dim vectors
+  └→ ChromaDB.from_documents (persist_directory="./chroma_store")
+  └→ Auto-Summary + Suggested Questions (Llama 3.3 70B via Groq)
+
+User Question
+  └→ MMR Retriever (fetch_k=25, k=10)
+  └→ CrossEncoderReranker (ms-marco-MiniLM-L-6-v2, top_n=4)
+  └→ ContextualCompressionRetriever
+  └→ ChatPromptTemplate (context + history + question)
+  └→ ChatGroq (llama-3.3-70b) → StrOutputParser (streaming)
+  └→ st.write_stream() → real-time token display
+  └→ Page citations shown in expandable Sources
+```
 
 ---
 
 ## 🚀 Tech Stack
 
-- **LLM:** Meta Llama 3.3 70B via [Groq Cloud](https://groq.com) (ultra-low latency LPU)
-- **Embeddings:** HuggingFace `all-MiniLM-L6-v2` (runs locally, no API cost)
-- **Vector DB:** ChromaDB (in-memory, session-based)
-- **Framework:** LangChain (RAG pipeline, MMR retrieval)
-- **Frontend:** Streamlit with custom CSS dark theme
+| Component | Technology | Why |
+|---|---|---|
+| LLM | Llama 3.3 70B via Groq | Free, fast (750 tok/s), open-source |
+| Inference | Groq LPU | Specialized chip for LLM inference |
+| Voice | Groq Whisper Large v3 Turbo | Fast, free transcription |
+| Embeddings | all-MiniLM-L6-v2 (local) | Free, private, 384-dim |
+| Retrieval | MMR + CrossEncoderReranker | Diverse + precise |
+| Vector DB | ChromaDB (persistent) | Zero setup, survives refresh |
+| Orchestration | LangChain LCEL | Composable RAG pipeline |
+| Frontend | Streamlit | Native file upload, streaming |
 
 ---
 
-## 🛠️ Installation & Setup
-
-### Prerequisites
-- Python 3.10+
-- A free [Groq API Key](https://console.groq.com)
-
-### Steps
+## 🛠️ Setup
 
 ```bash
-# 1. Clone the repository
+# 1. Clone
 git clone https://github.com/VividhDesign/pdfReader_ai.git
 cd pdfReader_ai
 
 # 2. Install dependencies
 pip install -r requirements.txt
 
-# 3. Set up environment variables
+# 3. Set API key
 echo "GROQ_API_KEY=your_key_here" > .env
 
-# 4. Run the app
+# 4. Run
 streamlit run app.py
 ```
 
-Then open `http://localhost:8501` in your browser.
+Get a free Groq API key at [console.groq.com](https://console.groq.com).
 
 ---
 
 ## 💡 How to Use
 
-1. **Upload a PDF** — Click the 📎 paperclip icon in the chat input
-2. **Read the Auto-Summary** — AI summarizes the document for you instantly
-3. **Click a Suggested Question** — Or type your own in the chat
-4. **See Page Citations** — Expand 📍 Sources to see which pages were used
-5. **Export** — Click 💾 Export Chat in the sidebar to save your Q&A
+1. **Upload** — Click 📎 in chat to attach PDF / DOCX / TXT
+2. **Or paste a URL** — Use the sidebar "Add Web URL" field
+3. **Or speak** — Click the mic button for voice input
+4. **Read Summary** — Auto-generated on upload
+5. **Ask Questions** — Click suggestions or type your own
+6. **Compare Docs** — Enable Compare Mode in sidebar for side-by-side answers
+7. **Export** — Download as `.md` or styled `.html` report
 
 ---
 
@@ -96,4 +111,4 @@ Then open `http://localhost:8501` in your browser.
 
 ---
 
-*Built with ❤️ using LangChain, Groq, and Streamlit*
+*Built with ❤️ using LangChain LCEL, Groq LPU, ChromaDB, and Streamlit*
